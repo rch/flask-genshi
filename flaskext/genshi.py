@@ -19,6 +19,7 @@ from inspect import getargspec
 from genshi.template import (NewTextTemplate, MarkupTemplate,
                              loader, TemplateLoader)
 from werkzeug import cached_property
+import flask
 from flask import current_app
 
 try:
@@ -153,20 +154,32 @@ class Genshi(object):
         self.callback = callback
         return callback
 
+    def _iter_jinja_loaders(self):
+        names = set()
+        for blueprint in flask._compat.itervalues(self.app.blueprints):
+            if flask.module.blueprint_is_module(blueprint):
+                # skipping old-style module blueprints
+                continue
+            loader = blueprint.jinja_loader
+            if loader is not None:
+                names.add(blueprint.name)
+                yield blueprint.name, loader
+        loader = self.app.jinja_loader
+        if loader is not None:
+            assert self.app.name not in names
+            yield self.app.name, loader
+    
     @cached_property
     def template_loader(self):
         """A :class:`genshi.template.TemplateLoader` that loads templates
         from the same places as Flask.
 
         """
-        path = loader.directory(os.path.join(self.app.root_path, 'templates'))
-        module_paths = {}
-        modules = getattr(self.app, 'modules', {})
-        for name, module in modules.iteritems():
-            module_path = os.path.join(module.root_path, 'templates')
-            if os.path.isdir(module_path):
-                module_paths[name] = loader.directory(module_path)
-        return TemplateLoader([path, loader.prefixed(**module_paths)],
+        search_paths = {}
+        for name, jinja_loader in self._iter_jinja_loaders():
+            assert type(jinja_loader.searchpath) is list and len(jinja_loader.searchpath) == 1
+            search_paths[name] = loader.directory(jinja_loader.searchpath[0])
+        return TemplateLoader(loader.prefixed(**search_paths),
                               auto_reload=self.app.debug,
                               callback=self.callback)
 
